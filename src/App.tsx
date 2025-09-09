@@ -3,14 +3,14 @@ import {
   useCurrentAccount,
   useSuiClientQuery,
   useSuiClient,
-  useSignAndExecuteTransaction,
+  useCurrentWallet,
 } from "@mysten/dapp-kit";
-import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 
-import { Transaction } from "@mysten/sui/transactions";
-import { WalrusClient } from "@mysten/walrus";
 import { useState, useEffect, useMemo } from "react";
 import "./App.css";
+import { WalrusClient, WalrusFile } from "@mysten/walrus";
+import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
+import { signAndExecuteTransaction } from "@mysten/wallet-standard";
 
 function App() {
   return (
@@ -86,14 +86,19 @@ function WalrusUpload() {
   const [error, setError] = useState<string | null>(null);
   const [walBalance, setWalBalance] = useState<string | null>(null);
   const [useUserPayment, setUseUserPayment] = useState(false);
-  const client = useMemo(
-    () => new SuiClient({ url: "https://fullnode.testnet.sui.io:443" }),
-    []
-  );
+  const { currentWallet } = useCurrentWallet();
 
   const account = useCurrentAccount();
   const suiClient = useSuiClient();
-  const { mutate: signAndExecuteTransaction } = useSignAndExecuteTransaction();
+  const walrusClient = useMemo<WalrusClient>(() => {
+    const _suiClient = new SuiClient({
+      url: getFullnodeUrl("testnet"),
+    });
+    return new WalrusClient({
+      network: "testnet",
+      suiClient: _suiClient,
+    });
+  }, []);
 
   // Check WAL balance
   useEffect(() => {
@@ -104,14 +109,11 @@ function WalrusUpload() {
           const walCoinType =
             "0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL";
 
-          const balance = await client.getBalance({
+          const balance = await suiClient.getBalance({
             owner: account.address,
             coinType: walCoinType,
           });
 
-          console.log("address:", account.address);
-          console.log("coinType:", walCoinType);
-          console.log("WAL balance:", balance);
           setWalBalance((Number(balance.totalBalance) / 1e9).toFixed(3));
         } catch (error) {
           console.log("WAL balance not found or error:", error);
@@ -138,7 +140,7 @@ function WalrusUpload() {
 
       if (useUserPayment) {
         // User-paid storage using Walrus SDK
-        await handleUserPaidUpload(textBlob);
+        await handleUserPaidUpload(text);
       } else {
         // Publisher-funded storage (current method)
         await handlePublisherFundedUpload(textBlob);
@@ -199,7 +201,92 @@ function WalrusUpload() {
     }
   };
 
-  const handleUserPaidUpload = async (textBlob: Blob) => {};
+  const handleUserPaidUpload = async (text: string) => {
+    if (!account) {
+      throw new Error("Wallet not connected");
+    }
+
+    console.log("text:", text);
+    // Step 1: Create the WalrusFile and flow
+    // Create the WalrusFile and flow
+    const flow = walrusClient.writeFilesFlow({
+      files: [
+        WalrusFile.from({
+          contents: new TextEncoder().encode(text),
+          identifier: "user-upload.txt",
+        }),
+      ],
+    });
+    console.log("after flow");
+
+    await flow.encode();
+
+    console.log("flow:", flow);
+
+    // Step 2: Register the blob
+    const registerTx = flow.register({
+      epochs,
+      owner: account.address,
+      deletable: true,
+    });
+
+    // Set the sender and build the transaction with the Sui client
+    registerTx.setSender(account.address);
+    await registerTx.build({ client: suiClient });
+
+    if (!currentWallet) {
+      throw new Error("No wallet connected");
+    }
+
+    const { digest } = await signAndExecuteTransaction(currentWallet, {
+      transaction: registerTx,
+      account: account,
+      chain: "sui:testnet",
+    });
+
+    console.log("digest:", digest);
+    // Step 3: Upload the data to storage nodes
+    await flow.upload({ digest });
+
+    console.log("after flow.upload");
+
+    // Step 4: Certify the blob
+    const certifyTx = flow.certify();
+
+    console.log("certifyTx:", certifyTx);
+
+    // Set the sender and build the transaction with the Sui client
+    certifyTx.setSender(account.address);
+    await certifyTx.build({ client: suiClient });
+
+    console.log("after certifyTx.build");
+
+    await signAndExecuteTransaction(currentWallet, {
+      transaction: certifyTx,
+      account: account,
+      chain: "sui:testnet",
+    });
+
+    console.log("after 2# signAndExecuteTransaction");
+
+    // Step 5: Get the new files
+    const files = await flow.listFiles();
+
+    // Extract info for UI
+    if (files.length > 0) {
+      const file = files[0];
+      setUploadResult({
+        blobId: file.blobId,
+        url: `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${file.blobId}`,
+        suiObjectId: file.id,
+        txDigest: digest,
+        cost: `Paid with WAL (user)`,
+        storageEpochs: epochs,
+      });
+    } else {
+      throw new Error("No files returned after upload");
+    }
+  };
 
   return (
     <div
