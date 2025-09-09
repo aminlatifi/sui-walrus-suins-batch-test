@@ -11,7 +11,7 @@ import App from "./App.tsx";
 const queryClient = new QueryClient();
 const networks = {
   testnet: { url: getFullnodeUrl("testnet") },
-  mainnet: { url: getFullnodeUrl("mainnet") },
+  // mainnet: { url: getFullnodeUrl("mainnet") },
 };
 
 createRoot(document.getElementById("root")!).render(

@@ -2,14 +2,21 @@ import {
   ConnectButton,
   useCurrentAccount,
   useSuiClientQuery,
+  useSuiClient,
+  useSignAndExecuteTransaction,
 } from "@mysten/dapp-kit";
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+
+import { Transaction } from "@mysten/sui/transactions";
+import { WalrusClient } from "@mysten/walrus";
+import { useState, useEffect, useMemo } from "react";
 import "./App.css";
 
 function App() {
   return (
     <>
       <div>
-        <h1>Sui Testnet dApp</h1>
+        <h1>Walrus File Upload - Sui Testnet</h1>
         <div className="card">
           <ConnectButton />
         </div>
@@ -29,6 +36,7 @@ function ConnectedAccount() {
   return (
     <div>
       <div>Connected to {account.address}</div>
+      <WalrusUpload />
       <OwnedObjects address={account.address} />
     </div>
   );
@@ -59,6 +67,412 @@ function OwnedObjects({ address }: { address: string }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function WalrusUpload() {
+  const [text, setText] = useState("");
+  const [epochs, setEpochs] = useState(1);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{
+    blobId: string;
+    url: string;
+    suiObjectId: string;
+    txDigest: string;
+    cost: string;
+    storageEpochs: number;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [walBalance, setWalBalance] = useState<string | null>(null);
+  const [useUserPayment, setUseUserPayment] = useState(false);
+  const client = useMemo(
+    () => new SuiClient({ url: "https://fullnode.testnet.sui.io:443" }),
+    []
+  );
+
+  const account = useCurrentAccount();
+  const suiClient = useSuiClient();
+  const { mutate: signAndExecuteTransaction } = useSignAndExecuteTransaction();
+
+  // Check WAL balance
+  useEffect(() => {
+    const checkWalBalance = async () => {
+      if (account?.address && suiClient) {
+        try {
+          // WAL token type for Sui testnet
+          const walCoinType =
+            "0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL";
+
+          const balance = await client.getBalance({
+            owner: account.address,
+            coinType: walCoinType,
+          });
+
+          console.log("address:", account.address);
+          console.log("coinType:", walCoinType);
+          console.log("WAL balance:", balance);
+          setWalBalance((Number(balance.totalBalance) / 1e9).toFixed(3));
+        } catch (error) {
+          console.log("WAL balance not found or error:", error);
+          setWalBalance("0.000");
+        }
+      }
+    };
+    checkWalBalance();
+  }, [account?.address, suiClient]);
+
+  const handleUpload = async () => {
+    if (!text.trim()) return;
+
+    setIsUploading(true);
+    setError(null);
+    setUploadResult(null);
+
+    try {
+      if (!account?.address) {
+        throw new Error("Please connect your wallet first");
+      }
+
+      const textBlob = new Blob([text], { type: "text/plain" });
+
+      if (useUserPayment) {
+        // User-paid storage using Walrus SDK
+        await handleUserPaidUpload(textBlob);
+      } else {
+        // Publisher-funded storage (current method)
+        await handlePublisherFundedUpload(textBlob);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handlePublisherFundedUpload = async (textBlob: Blob) => {
+    const publisherUrl = "https://publisher.walrus-testnet.walrus.space";
+    const response = await fetch(
+      `${publisherUrl}/v1/blobs?epochs=${epochs}&send_object_to=${
+        account!.address
+      }`,
+      {
+        method: "PUT",
+        body: textBlob,
+      }
+    );
+
+    if (response.status === 200) {
+      const result = await response.json();
+      let blobId: string;
+      let suiObjectId: string;
+      let txDigest: string;
+      let cost: string;
+
+      if (result.newlyCreated) {
+        blobId = result.newlyCreated.blobObject.blobId;
+        suiObjectId = result.newlyCreated.blobObject.id;
+        txDigest = "Publisher-funded";
+        cost = `${result.newlyCreated.cost || 0} FROST (paid by publisher)`;
+      } else if (result.alreadyCertified) {
+        blobId = result.alreadyCertified.blobId;
+        suiObjectId = "Already exists";
+        txDigest = result.alreadyCertified.event?.txDigest || "N/A";
+        cost = "0 FROST (already certified)";
+      } else {
+        throw new Error("Unexpected response format");
+      }
+
+      setUploadResult({
+        blobId,
+        url: `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`,
+        suiObjectId,
+        txDigest,
+        cost,
+        storageEpochs: epochs,
+      });
+    } else {
+      const errorText = await response.text();
+      throw new Error(
+        `Upload failed with status ${response.status}: ${errorText}`
+      );
+    }
+  };
+
+  const handleUserPaidUpload = async (textBlob: Blob) => {};
+
+  return (
+    <div
+      style={{
+        margin: "20px 0",
+        padding: "20px",
+        border: "1px solid #ccc",
+        borderRadius: "8px",
+      }}
+    >
+      <h3>Upload Text to Walrus</h3>
+
+      {/* Payment Method Selection */}
+      <div
+        style={{
+          marginBottom: "15px",
+          padding: "10px",
+          backgroundColor: "#f8f9fa",
+          borderRadius: "4px",
+        }}
+      >
+        <div style={{ marginBottom: "10px" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              marginBottom: "8px",
+            }}
+          >
+            <input
+              type="radio"
+              name="paymentMethod"
+              checked={!useUserPayment}
+              onChange={() => setUseUserPayment(false)}
+              style={{ marginRight: "8px" }}
+            />
+            <strong>Publisher-Funded (Free)</strong>
+            <span
+              style={{ marginLeft: "10px", fontSize: "12px", color: "#666" }}
+            >
+              Publisher pays storage costs, limited duration
+            </span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center" }}>
+            <input
+              type="radio"
+              name="paymentMethod"
+              checked={useUserPayment}
+              onChange={() => setUseUserPayment(true)}
+              style={{ marginRight: "8px" }}
+            />
+            <strong>User-Paid</strong>
+            <span
+              style={{ marginLeft: "10px", fontSize: "12px", color: "#666" }}
+            >
+              You pay with WAL tokens, choose storage duration
+            </span>
+          </label>
+        </div>
+
+        {walBalance !== null && (
+          <div style={{ fontSize: "12px", color: "#666" }}>
+            Your WAL balance: <strong>{walBalance} WAL</strong>
+            {Number(walBalance) === 0 && (
+              <span style={{ color: "#dc3545", marginLeft: "10px" }}>
+                (Get WAL tokens from{" "}
+                <a
+                  href="https://discord.gg/Sui"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Sui Discord #testnet-faucet
+                </a>
+                )
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Storage Duration */}
+      <div style={{ marginBottom: "15px" }}>
+        <label
+          style={{ display: "block", marginBottom: "5px", fontWeight: "bold" }}
+        >
+          Storage Duration: {epochs} epoch{epochs !== 1 ? "s" : ""} (~
+          {epochs * 14} days)
+        </label>
+        <input
+          type="range"
+          min="1"
+          max="10"
+          value={epochs}
+          onChange={(e) => setEpochs(Number(e.target.value))}
+          style={{ width: "100%", marginBottom: "5px" }}
+          disabled={!useUserPayment}
+        />
+        <div style={{ fontSize: "12px", color: "#666" }}>
+          {useUserPayment
+            ? "Longer storage = higher WAL cost"
+            : "Publisher-funded storage limited to selected epochs"}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: "10px" }}>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Enter your text here..."
+          style={{
+            width: "100%",
+            height: "100px",
+            padding: "8px",
+            border: "1px solid #ddd",
+            borderRadius: "4px",
+            fontSize: "14px",
+          }}
+        />
+      </div>
+      <button
+        onClick={handleUpload}
+        disabled={
+          !text.trim() ||
+          isUploading ||
+          !account ||
+          (useUserPayment && Number(walBalance) === 0)
+        }
+        style={{
+          padding: "10px 20px",
+          backgroundColor:
+            text.trim() &&
+            !isUploading &&
+            account &&
+            !(useUserPayment && Number(walBalance) === 0)
+              ? "#007bff"
+              : "#ccc",
+          color: "white",
+          border: "none",
+          borderRadius: "4px",
+          cursor:
+            text.trim() &&
+            !isUploading &&
+            account &&
+            !(useUserPayment && Number(walBalance) === 0)
+              ? "pointer"
+              : "not-allowed",
+        }}
+      >
+        {isUploading
+          ? useUserPayment
+            ? "Creating Transaction..."
+            : "Uploading to Walrus & Sui..."
+          : useUserPayment
+          ? `Pay with WAL & Upload (${epochs} epochs)`
+          : `Upload to Walrus (${epochs} epochs)`}
+      </button>
+
+      {error && (
+        <div style={{ marginTop: "10px", color: "red", fontSize: "14px" }}>
+          Error: {error}
+        </div>
+      )}
+
+      {uploadResult && (
+        <div
+          style={{
+            marginTop: "20px",
+            padding: "15px",
+            backgroundColor: "#010407",
+            border: "1px solid #007bff",
+            borderRadius: "8px",
+          }}
+        >
+          <h4 style={{ color: "#007bff", marginTop: 0 }}>
+            Upload Successful! 🎉
+          </h4>
+
+          <div style={{ marginBottom: "10px" }}>
+            <strong>Blob ID:</strong>
+            <code
+              style={{
+                backgroundColor: "#e9ecef",
+                padding: "2px 4px",
+                marginLeft: "5px",
+              }}
+            >
+              {uploadResult.blobId}
+            </code>
+          </div>
+
+          <div style={{ marginBottom: "10px" }}>
+            <strong>Sui Object ID:</strong>
+            <code
+              style={{
+                backgroundColor: "#e9ecef",
+                padding: "2px 4px",
+                marginLeft: "5px",
+              }}
+            >
+              {uploadResult.suiObjectId}
+            </code>
+          </div>
+
+          <div style={{ marginBottom: "10px" }}>
+            <strong>Storage Cost:</strong>
+            <span
+              style={{
+                marginLeft: "5px",
+                color: useUserPayment ? "#dc3545" : "#28a745",
+              }}
+            >
+              {uploadResult.cost}
+            </span>
+          </div>
+
+          <div style={{ marginBottom: "10px" }}>
+            <strong>Storage Duration:</strong>
+            <span style={{ marginLeft: "5px" }}>
+              {uploadResult.storageEpochs} epoch
+              {uploadResult.storageEpochs !== 1 ? "s" : ""} (~
+              {uploadResult.storageEpochs * 14} days)
+            </span>
+          </div>
+
+          {uploadResult.txDigest !== "N/A" &&
+            uploadResult.txDigest !== "Publisher-funded" && (
+              <div style={{ marginBottom: "10px" }}>
+                <strong>Transaction:</strong>{" "}
+                <a
+                  href={`https://suiscan.xyz/testnet/tx/${uploadResult.txDigest}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: "#007bff" }}
+                >
+                  View on Suiscan
+                </a>
+              </div>
+            )}
+
+          <div style={{ marginBottom: "10px" }}>
+            <strong>View Content:</strong>{" "}
+            <a
+              href={uploadResult.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "#007bff" }}
+            >
+              Open in Walrus Network
+            </a>
+          </div>
+
+          <div style={{ fontSize: "12px", color: "#666", marginTop: "10px" }}>
+            ✅ File uploaded to Walrus decentralized storage
+            <br />
+            ✅ Sui blockchain object created and sent to your wallet
+            <br />
+            {useUserPayment ? (
+              <>
+                💰 You paid for {uploadResult.storageEpochs} epoch
+                {uploadResult.storageEpochs !== 1 ? "s" : ""} of storage with
+                your WAL tokens
+              </>
+            ) : (
+              <>
+                🆓 Publisher funded storage for {uploadResult.storageEpochs}{" "}
+                epoch{uploadResult.storageEpochs !== 1 ? "s" : ""}
+              </>
+            )}
+            <br />
+            🔗 Content is now accessible on the decentralized network
+          </div>
+        </div>
+      )}
     </div>
   );
 }
