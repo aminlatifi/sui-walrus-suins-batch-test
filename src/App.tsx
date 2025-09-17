@@ -11,6 +11,8 @@ import "./App.css";
 import { WalrusClient, WalrusFile } from "@mysten/walrus";
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 import { signAndExecuteTransaction } from "@mysten/wallet-standard";
+import { handlePublisherFundedUpload } from "./walrusUtils";
+import type { UploadResult } from "./walrusUtils";
 
 function App() {
   return (
@@ -75,17 +77,10 @@ function WalrusUpload() {
   const [text, setText] = useState("");
   const [epochs, setEpochs] = useState(1);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<{
-    blobId: string;
-    url: string;
-    suiObjectId: string;
-    txDigest: string;
-    cost: string;
-    storageEpochs: number;
-  } | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [walBalance, setWalBalance] = useState<string | null>(null);
-  const [useUserPayment, setUseUserPayment] = useState(false);
+  const [useUserPayment, setUseUserPayment] = useState(true);
   const { currentWallet } = useCurrentWallet();
 
   const account = useCurrentAccount();
@@ -143,61 +138,17 @@ function WalrusUpload() {
         await handleUserPaidUpload(text);
       } else {
         // Publisher-funded storage (current method)
-        await handlePublisherFundedUpload(textBlob);
+        const result = await handlePublisherFundedUpload(
+          textBlob,
+          epochs,
+          account.address
+        );
+        setUploadResult(result);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setIsUploading(false);
-    }
-  };
-
-  const handlePublisherFundedUpload = async (textBlob: Blob) => {
-    const publisherUrl = "https://publisher.walrus-testnet.walrus.space";
-    const response = await fetch(
-      `${publisherUrl}/v1/blobs?epochs=${epochs}&send_object_to=${
-        account!.address
-      }`,
-      {
-        method: "PUT",
-        body: textBlob,
-      }
-    );
-
-    if (response.status === 200) {
-      const result = await response.json();
-      let blobId: string;
-      let suiObjectId: string;
-      let txDigest: string;
-      let cost: string;
-
-      if (result.newlyCreated) {
-        blobId = result.newlyCreated.blobObject.blobId;
-        suiObjectId = result.newlyCreated.blobObject.id;
-        txDigest = "Publisher-funded";
-        cost = `${result.newlyCreated.cost || 0} FROST (paid by publisher)`;
-      } else if (result.alreadyCertified) {
-        blobId = result.alreadyCertified.blobId;
-        suiObjectId = "Already exists";
-        txDigest = result.alreadyCertified.event?.txDigest || "N/A";
-        cost = "0 FROST (already certified)";
-      } else {
-        throw new Error("Unexpected response format");
-      }
-
-      setUploadResult({
-        blobId,
-        url: `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`,
-        suiObjectId,
-        txDigest,
-        cost,
-        storageEpochs: epochs,
-      });
-    } else {
-      const errorText = await response.text();
-      throw new Error(
-        `Upload failed with status ${response.status}: ${errorText}`
-      );
     }
   };
 
@@ -271,15 +222,20 @@ function WalrusUpload() {
 
     // Step 5: Get the new files
     const files = await flow.listFiles();
+    const filesContent = await walrusClient.getFiles({
+      ids: files.map((file) => file.blobId),
+    });
 
     // Extract info for UI
     if (files.length > 0) {
       const file = files[0];
+      const content = filesContent[0];
       setUploadResult({
         blobId: file.blobId,
         url: `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${file.blobId}`,
         suiObjectId: file.id,
         txDigest: digest,
+        content: await content.text(),
         cost: `Paid with WAL (user)`,
         storageEpochs: epochs,
       });
@@ -468,7 +424,7 @@ function WalrusUpload() {
             <strong>Blob ID:</strong>
             <code
               style={{
-                backgroundColor: "#e9ecef",
+                backgroundColor: "#101b27",
                 padding: "2px 4px",
                 marginLeft: "5px",
               }}
@@ -481,7 +437,7 @@ function WalrusUpload() {
             <strong>Sui Object ID:</strong>
             <code
               style={{
-                backgroundColor: "#e9ecef",
+                backgroundColor: "#101b27",
                 padding: "2px 4px",
                 marginLeft: "5px",
               }}
@@ -536,6 +492,18 @@ function WalrusUpload() {
             >
               Open in Walrus Network
             </a>
+          </div>
+          <div style={{ marginBottom: "10px" }}>
+            <strong>Content:</strong>{" "}
+            <code
+              style={{
+                backgroundColor: "#101b27",
+                padding: "2px 4px",
+                marginLeft: "5px",
+              }}
+            >
+              {uploadResult.content}
+            </code>
           </div>
 
           <div style={{ fontSize: "12px", color: "#666", marginTop: "10px" }}>
