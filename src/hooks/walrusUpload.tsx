@@ -11,6 +11,12 @@ import {
 } from "@mysten/dapp-kit";
 import toast from "react-hot-toast";
 
+export type UploadFileData = {
+  fileIdentifier: string;
+  contentType: ContentType;
+  bytes: Uint8Array;
+};
+
 export const useWalrusUpload = () => {
   const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [quiltId, setQuiltId] = useState<string | null>(null);
@@ -24,14 +30,7 @@ export const useWalrusUpload = () => {
     });
   }, [suiClient]);
 
-  const uploadFiles = async (
-    files: {
-      fileIdentifier: string;
-      contentType: ContentType;
-      bytes: Uint8Array;
-    }[],
-    epochs: number
-  ) => {
+  const uploadFiles = async (files: UploadFileData[], epochs: number) => {
     setUploadResults([]);
     setQuiltId(null);
 

@@ -47,40 +47,82 @@ function ConnectedAccount() {
   );
 }
 
+interface Item {
+  id: number;
+  key: string;
+  type: "text" | "image";
+  value: string;
+  bytes: Uint8Array;
+}
+
 function WalrusUpload() {
-  const [text, setText] = useState("");
   const [epochs, setEpochs] = useState(1);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [items, setItems] = useState<Item[]>([
+    {
+      id: Date.now(),
+      key: "default",
+      type: "text",
+      value: "",
+      bytes: new Uint8Array(),
+    },
+  ]);
   const { uploadFiles, quiltId, uploadResults } = useWalrusUpload();
+
   const walBalance = useCheckWalBalance();
 
   const account = useCurrentAccount();
 
   const handleUpload = async () => {
-    if (!text.trim()) return;
+    // Check if we have valid items to upload
+    const validItems = items.filter(
+      (item) => item.key.trim() && item.bytes.length > 0
+    );
+    if (validItems.length === 0) {
+      toast.error("Please add at least one item with a key and value");
+      return;
+    }
 
     setIsUploading(true);
     setError(null);
+
+    // Show loading toast
+    const loadingToast = toast.loading(
+      `Uploading ${validItems.length} item${
+        validItems.length !== 1 ? "s" : ""
+      } to Walrus...`
+    );
 
     try {
       if (!account?.address) {
         throw new Error("Please connect your wallet first");
       }
 
-      await uploadFiles(
-        [
-          {
-            fileIdentifier: "user-upload.txt",
-            contentType: FileType.TEXT,
-            bytes: new TextEncoder().encode(text),
-          },
-        ],
-        epochs
+      // Convert items to upload format
+      const filesToUpload = validItems.map((item) => ({
+        fileIdentifier: item.key,
+        contentType: item.type === "image" ? FileType.IMAGE : FileType.TEXT,
+        bytes: item.bytes,
+      }));
+
+      await uploadFiles(filesToUpload, epochs);
+
+      // Success toast
+      toast.success(
+        `🎉 Upload successful! ${validItems.length} item${
+          validItems.length !== 1 ? "s" : ""
+        } stored for ${epochs} epoch${epochs !== 1 ? "s" : ""} (~${
+          epochs * 14
+        } days)`,
+        { id: loadingToast }
       );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Upload failed";
       setError(errorMessage);
+
+      // Error toast
+      toast.error(`Upload failed: ${errorMessage}`, { id: loadingToast });
     } finally {
       setIsUploading(false);
     }
@@ -148,29 +190,170 @@ function WalrusUpload() {
       </div>
 
       <div style={{ marginBottom: "10px" }}>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Enter your text here..."
+        {items.map((item, idx) => (
+          <div
+            key={item.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              marginBottom: "10px",
+            }}
+          >
+            {/* Key input */}
+            <input
+              type="text"
+              value={item.key}
+              onChange={(e) => {
+                const newItems = [...items];
+                newItems[idx].key = e.target.value;
+                setItems(newItems);
+              }}
+              placeholder="Key"
+              style={{
+                flex: 1,
+                padding: "6px",
+                border: "1px solid #ddd",
+                borderRadius: "4px",
+                fontSize: "14px",
+              }}
+            />
+
+            {/* Type dropdown */}
+            <select
+              value={item.type}
+              onChange={(e) => {
+                const newItems = [...items];
+                newItems[idx].type = e.target.value as "text" | "image";
+                // Reset value and bytes when type changes
+                newItems[idx].value = "";
+                newItems[idx].bytes = new Uint8Array();
+                setItems(newItems);
+              }}
+              style={{
+                flex: 0.7,
+                padding: "6px",
+                border: "1px solid #ddd",
+                borderRadius: "4px",
+                fontSize: "14px",
+              }}
+            >
+              <option value="text">Text</option>
+              <option value="image">Image</option>
+            </select>
+
+            {/* Value input */}
+            {item.type === "text" ? (
+              <input
+                type="text"
+                value={item.value}
+                onChange={(e) => {
+                  const newItems = [...items];
+                  newItems[idx].value = e.target.value;
+                  newItems[idx].bytes = new TextEncoder().encode(
+                    e.target.value
+                  );
+                  setItems(newItems);
+                }}
+                placeholder="Enter value"
+                style={{
+                  flex: 2,
+                  padding: "6px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                }}
+              />
+            ) : (
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const uint8 = new Uint8Array(arrayBuffer);
+                    const newItems = [...items];
+                    newItems[idx].value = file.name;
+                    newItems[idx].bytes = uint8;
+                    setItems(newItems);
+                  }
+                }}
+                style={{
+                  flex: 2,
+                  padding: "6px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "14px",
+                }}
+              />
+            )}
+
+            {/* Remove item button */}
+            <button
+              type="button"
+              onClick={() => {
+                setItems(items.filter((_, i) => i !== idx));
+                toast.success("Item removed");
+              }}
+              style={{
+                marginLeft: "5px",
+                background: "#dc3545",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                padding: "6px 10px",
+                cursor: "pointer",
+              }}
+              title="Remove item"
+            >
+              &times;
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => {
+            setItems([
+              ...items,
+              {
+                id: Date.now() + Math.random(),
+                key: "",
+                type: "text",
+                value: "",
+                bytes: new Uint8Array(),
+              },
+            ]);
+            toast.success("New item added");
+          }}
           style={{
-            width: "100%",
-            height: "100px",
-            padding: "8px",
-            border: "1px solid #ddd",
+            marginBottom: "10px",
+            background: "#007bff",
+            color: "white",
+            border: "none",
             borderRadius: "4px",
+            padding: "6px 16px",
+            cursor: "pointer",
             fontSize: "14px",
           }}
-        />
+        >
+          + Add Item
+        </button>
       </div>
       <button
         onClick={handleUpload}
         disabled={
-          !text.trim() || isUploading || !account || Number(walBalance) === 0
+          items.filter((item) => item.key.trim() && item.bytes.length > 0)
+            .length === 0 ||
+          isUploading ||
+          !account ||
+          Number(walBalance) === 0
         }
         style={{
           padding: "10px 20px",
           backgroundColor:
-            text.trim() &&
+            items.filter((item) => item.key.trim() && item.bytes.length > 0)
+              .length > 0 &&
             !isUploading &&
             account &&
             !(Number(walBalance) === 0)
@@ -180,7 +363,8 @@ function WalrusUpload() {
           border: "none",
           borderRadius: "4px",
           cursor:
-            text.trim() &&
+            items.filter((item) => item.key.trim() && item.bytes.length > 0)
+              .length > 0 &&
             !isUploading &&
             account &&
             !(Number(walBalance) === 0)
