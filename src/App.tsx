@@ -11,8 +11,9 @@ import "./App.css";
 import { WalrusClient, WalrusFile } from "@mysten/walrus";
 import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
 import { signAndExecuteTransaction } from "@mysten/wallet-standard";
-import { handlePublisherFundedUpload } from "./walrusUtils";
-import type { UploadResult } from "./walrusUtils";
+import { FileType, handlePublisherFundedUpload } from "./walrusUtils";
+import type { ContentType, UploadResult } from "./walrusUtils";
+// import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 
 function App() {
   return (
@@ -77,7 +78,7 @@ function WalrusUpload() {
   const [text, setText] = useState("");
   const [epochs, setEpochs] = useState(1);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [walBalance, setWalBalance] = useState<string | null>(null);
   const [useUserPayment, setUseUserPayment] = useState(true);
@@ -124,14 +125,14 @@ function WalrusUpload() {
 
     setIsUploading(true);
     setError(null);
-    setUploadResult(null);
+    setUploadResult([]);
 
     try {
       if (!account?.address) {
         throw new Error("Please connect your wallet first");
       }
 
-      const textBlob = new Blob([text], { type: "text/plain" });
+      const textBlob = new Blob([text], { type: FileType.TEXT });
 
       if (useUserPayment) {
         // User-paid storage using Walrus SDK
@@ -143,7 +144,7 @@ function WalrusUpload() {
           epochs,
           account.address
         );
-        setUploadResult(result);
+        setUploadResult([result]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -153,11 +154,72 @@ function WalrusUpload() {
   };
 
   const handleUserPaidUpload = async (text: string) => {
+    // const keypair = Ed25519Keypair.fromSecretKey(
+    //   ""
+    // );
+
     if (!account) {
       throw new Error("Wallet not connected");
     }
 
     console.log("text:", text);
+
+    // const file = WalrusFile.from({
+    //   contents: new TextEncoder().encode(text),
+    //   identifier: "user-upload.txt",
+    //   tags: {
+    //     "content-type": "text/plain",
+    //   },
+    // });
+
+    // console.log("file text:", await file.text());
+    // console.log("file bytes:", await file.bytes());
+    // console.log("file identifier:", await file.getIdentifier());
+    // console.log("file tags:", await file.getTags());
+
+    // const result = await walrusClient.writeFiles({
+    //   files: [file],
+    //   epochs, // Storage duration in epochs
+    //   deletable: true, // Whether files can be deleted
+    //   signer: keypair, // Signs and pays for transactions
+    // });
+
+    // console.log("result:", result);
+
+    // const quiltId = result[0].blobId;
+
+    // const blob = await walrusClient.getBlob({ blobId: quiltId });
+    // const blobFiles = await blob.files();
+    // // time
+    // console.log("time:", new Date().toISOString());
+    // console.log("blobFiles:", blobFiles);
+
+    // blobFiles.forEach(async (file) => {
+    //   console.log("blob file bytes:", await file.bytes());
+    //   console.log("blob file text:", await file.text());
+    //   console.log("blob file tags:", await file.getTags());
+    //   console.log("blob file identifier:", await file.getIdentifier());
+    //   try {
+    //     console.log("blob file json:", await file.json());
+    //   } catch (error) {
+    //     console.log("blob file json error:", error);
+    //   }
+    //   console.log("time:", new Date().toISOString());
+    // });
+
+    // const files = await walrusClient.getFiles({
+    //   ids: result.map((file) => file.blobId),
+    // });
+
+    // console.log("files:", files);
+
+    // files.forEach(async (file) => {
+    //   console.log("file bytes:", await file.bytes());
+    //   console.log("file text:", await file.text());
+    //   console.log("file tags:", await file.getTags());
+    //   console.log("file identifier:", await file.getIdentifier());
+    // });
+
     // Step 1: Create the WalrusFile and flow
     // Create the WalrusFile and flow
     const flow = walrusClient.writeFilesFlow({
@@ -165,6 +227,9 @@ function WalrusUpload() {
         WalrusFile.from({
           contents: new TextEncoder().encode(text),
           identifier: "user-upload.txt",
+          tags: {
+            "content-type": FileType.TEXT,
+          },
         }),
       ],
     });
@@ -222,26 +287,33 @@ function WalrusUpload() {
 
     // Step 5: Get the new files
     const files = await flow.listFiles();
-    const filesContent = await walrusClient.getFiles({
-      ids: files.map((file) => file.blobId),
+    const quiltId = files[0].blobId;
+
+    const blob = await walrusClient.getBlob({ blobId: quiltId });
+    console.log("blob:", blob);
+    const blobFiles = await blob.files();
+    console.log("blobFiles:", blobFiles);
+
+    const newUploadResult: UploadResult[] = [];
+    blobFiles.forEach(async (file) => {
+      console.log("file:", file);
+      const tags = await file.getTags();
+      const fileIdentifier = await file.getIdentifier();
+      const bytes = await file.bytes();
+
+      console.log("tags:", tags);
+      console.log("fileIdentifier:", fileIdentifier);
+      console.log("bytes:", bytes);
+
+      newUploadResult.push({
+        id: quiltId,
+        contentType: tags["content-type"] as ContentType,
+        fileIdentifier: fileIdentifier,
+        bytes,
+      });
     });
 
-    // Extract info for UI
-    if (files.length > 0) {
-      const file = files[0];
-      const content = filesContent[0];
-      setUploadResult({
-        blobId: file.blobId,
-        url: `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${file.blobId}`,
-        suiObjectId: file.id,
-        txDigest: digest,
-        content: await content.text(),
-        cost: `Paid with WAL (user)`,
-        storageEpochs: epochs,
-      });
-    } else {
-      throw new Error("No files returned after upload");
-    }
+    setUploadResult(newUploadResult);
   };
 
   return (
@@ -406,7 +478,7 @@ function WalrusUpload() {
         </div>
       )}
 
-      {uploadResult && (
+      {uploadResult.length > 0 && (
         <div
           style={{
             marginTop: "20px",
@@ -419,113 +491,14 @@ function WalrusUpload() {
           <h4 style={{ color: "#007bff", marginTop: 0 }}>
             Upload Successful! 🎉
           </h4>
-
-          <div style={{ marginBottom: "10px" }}>
-            <strong>Blob ID:</strong>
-            <code
-              style={{
-                backgroundColor: "#101b27",
-                padding: "2px 4px",
-                marginLeft: "5px",
-              }}
-            >
-              {uploadResult.blobId}
-            </code>
-          </div>
-
-          <div style={{ marginBottom: "10px" }}>
-            <strong>Sui Object ID:</strong>
-            <code
-              style={{
-                backgroundColor: "#101b27",
-                padding: "2px 4px",
-                marginLeft: "5px",
-              }}
-            >
-              {uploadResult.suiObjectId}
-            </code>
-          </div>
-
-          <div style={{ marginBottom: "10px" }}>
-            <strong>Storage Cost:</strong>
-            <span
-              style={{
-                marginLeft: "5px",
-                color: useUserPayment ? "#dc3545" : "#28a745",
-              }}
-            >
-              {uploadResult.cost}
-            </span>
-          </div>
-
-          <div style={{ marginBottom: "10px" }}>
-            <strong>Storage Duration:</strong>
-            <span style={{ marginLeft: "5px" }}>
-              {uploadResult.storageEpochs} epoch
-              {uploadResult.storageEpochs !== 1 ? "s" : ""} (~
-              {uploadResult.storageEpochs * 14} days)
-            </span>
-          </div>
-
-          {uploadResult.txDigest !== "N/A" &&
-            uploadResult.txDigest !== "Publisher-funded" && (
-              <div style={{ marginBottom: "10px" }}>
-                <strong>Transaction:</strong>{" "}
-                <a
-                  href={`https://suiscan.xyz/testnet/tx/${uploadResult.txDigest}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: "#007bff" }}
-                >
-                  View on Suiscan
-                </a>
-              </div>
-            )}
-
-          <div style={{ marginBottom: "10px" }}>
-            <strong>View Content:</strong>{" "}
-            <a
-              href={uploadResult.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: "#007bff" }}
-            >
-              Open in Walrus Network
-            </a>
-          </div>
-          <div style={{ marginBottom: "10px" }}>
-            <strong>Content:</strong>{" "}
-            <code
-              style={{
-                backgroundColor: "#101b27",
-                padding: "2px 4px",
-                marginLeft: "5px",
-              }}
-            >
-              {uploadResult.content}
-            </code>
-          </div>
-
-          <div style={{ fontSize: "12px", color: "#666", marginTop: "10px" }}>
-            ✅ File uploaded to Walrus decentralized storage
-            <br />
-            ✅ Sui blockchain object created and sent to your wallet
-            <br />
-            {useUserPayment ? (
-              <>
-                💰 You paid for {uploadResult.storageEpochs} epoch
-                {uploadResult.storageEpochs !== 1 ? "s" : ""} of storage with
-                your WAL tokens
-              </>
-            ) : (
-              <>
-                🆓 Publisher funded storage for {uploadResult.storageEpochs}{" "}
-                epoch{uploadResult.storageEpochs !== 1 ? "s" : ""}
-              </>
-            )}
-            <br />
-            🔗 Content is now accessible on the decentralized network
-          </div>
+          🔗 Content is now accessible on the decentralized network
+          {uploadResult.map((result) => (
+            <div key={result.id}>
+              <h5>{result.fileIdentifier}</h5>
+              <p>{result.contentType}</p>
+              <p>{result.bytes.toString()}</p>
+            </div>
+          ))}
         </div>
       )}
     </div>

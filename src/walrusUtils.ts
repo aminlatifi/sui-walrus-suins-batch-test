@@ -1,11 +1,18 @@
+// Create const object for file types (compatible with erasableSyntaxOnly)
+export const FileType = {
+  TEXT: "text/plain",
+  JSON: "application/json",
+  IMAGE: "image/jpeg",
+  VIDEO: "video/mp4",
+  AUDIO: "audio/mpeg",
+} as const;
+
+export type ContentType = (typeof FileType)[keyof typeof FileType];
 export interface UploadResult {
-  blobId: string;
-  url: string;
-  suiObjectId: string;
-  txDigest: string;
-  content?: string;
-  cost: string;
-  storageEpochs: number;
+  id: string;
+  contentType: ContentType;
+  fileIdentifier: string | null;
+  bytes: Uint8Array;
 }
 
 export const handlePublisherFundedUpload = async (
@@ -25,31 +32,20 @@ export const handlePublisherFundedUpload = async (
   if (response.status === 200) {
     const result = await response.json();
     let blobId: string;
-    let suiObjectId: string;
-    let txDigest: string;
-    let cost: string;
 
     if (result.newlyCreated) {
       blobId = result.newlyCreated.blobObject.blobId;
-      suiObjectId = result.newlyCreated.blobObject.id;
-      txDigest = "Publisher-funded";
-      cost = `${result.newlyCreated.cost || 0} FROST (paid by publisher)`;
     } else if (result.alreadyCertified) {
       blobId = result.alreadyCertified.blobId;
-      suiObjectId = "Already exists";
-      txDigest = result.alreadyCertified.event?.txDigest || "N/A";
-      cost = "0 FROST (already certified)";
     } else {
       throw new Error("Unexpected response format");
     }
 
     return {
-      blobId,
-      url: `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`,
-      suiObjectId,
-      txDigest,
-      cost,
-      storageEpochs: epochs,
+      id: blobId,
+      contentType: FileType.TEXT,
+      fileIdentifier: "user-upload.txt",
+      bytes: new Uint8Array(),
     };
   } else {
     const errorText = await response.text();
