@@ -1,7 +1,7 @@
 // Create a hook to handle the walrus upload, it must get a list of files with their types and bytes, and return single quilt id and a function to upload the files
 
 import { useMemo, useState } from "react";
-import type { UploadResult, ContentType } from "../walrusUtils";
+import type { UploadResult, ContentType } from "../utils/walrusUtils";
 import { WalrusFile, WalrusClient } from "@mysten/walrus";
 import { signAndExecuteTransaction } from "@mysten/wallet-standard";
 import {
