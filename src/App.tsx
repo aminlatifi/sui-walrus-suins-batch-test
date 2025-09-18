@@ -3,17 +3,13 @@ import {
   useCurrentAccount,
   useSuiClientQuery,
   useSuiClient,
-  useCurrentWallet,
 } from "@mysten/dapp-kit";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import "./App.css";
-import { WalrusClient, WalrusFile } from "@mysten/walrus";
-import { getFullnodeUrl, SuiClient } from "@mysten/sui/client";
-import { signAndExecuteTransaction } from "@mysten/wallet-standard";
-import { FileType, handlePublisherFundedUpload } from "./walrusUtils";
-import type { ContentType, UploadResult } from "./walrusUtils";
-// import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { FileType } from "./walrusUtils";
+import toast from "react-hot-toast";
+import { useWalrusUpload } from "./hooks/walrusUpload";
 
 function App() {
   return (
@@ -31,6 +27,17 @@ function App() {
 
 function ConnectedAccount() {
   const account = useCurrentAccount();
+
+  useEffect(() => {
+    if (account) {
+      toast.success(
+        `🔗 Wallet connected: ${account.address.slice(
+          0,
+          8
+        )}...${account.address.slice(-6)}`
+      );
+    }
+  }, [account]);
 
   if (!account) {
     return null;
@@ -78,23 +85,12 @@ function WalrusUpload() {
   const [text, setText] = useState("");
   const [epochs, setEpochs] = useState(1);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<UploadResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [walBalance, setWalBalance] = useState<string | null>(null);
-  const [useUserPayment, setUseUserPayment] = useState(true);
-  const { currentWallet } = useCurrentWallet();
+  const { uploadFiles, quiltId, uploadResults } = useWalrusUpload();
 
   const account = useCurrentAccount();
   const suiClient = useSuiClient();
-  const walrusClient = useMemo<WalrusClient>(() => {
-    const _suiClient = new SuiClient({
-      url: getFullnodeUrl("testnet"),
-    });
-    return new WalrusClient({
-      network: "testnet",
-      suiClient: _suiClient,
-    });
-  }, []);
 
   // Check WAL balance
   useEffect(() => {
@@ -110,10 +106,27 @@ function WalrusUpload() {
             coinType: walCoinType,
           });
 
-          setWalBalance((Number(balance.totalBalance) / 1e9).toFixed(3));
+          const walBalanceValue = (Number(balance.totalBalance) / 1e9).toFixed(
+            3
+          );
+          setWalBalance(walBalanceValue);
+
+          // Show balance info toast
+          if (Number(walBalanceValue) === 0) {
+            toast(
+              `💰 WAL Balance: ${walBalanceValue} WAL\n💡 Get WAL tokens from Sui Discord #testnet-faucet for user-paid uploads`,
+              {
+                icon: "⚠️",
+                duration: 6000,
+              }
+            );
+          } else {
+            toast.success(`💰 WAL Balance loaded: ${walBalanceValue} WAL`);
+          }
         } catch (error) {
           console.log("WAL balance not found or error:", error);
           setWalBalance("0.000");
+          toast.error("Failed to load WAL balance");
         }
       }
     };
@@ -125,195 +138,28 @@ function WalrusUpload() {
 
     setIsUploading(true);
     setError(null);
-    setUploadResult([]);
 
     try {
       if (!account?.address) {
         throw new Error("Please connect your wallet first");
       }
 
-      const textBlob = new Blob([text], { type: FileType.TEXT });
-
-      if (useUserPayment) {
-        // User-paid storage using Walrus SDK
-        await handleUserPaidUpload(text);
-      } else {
-        // Publisher-funded storage (current method)
-        const result = await handlePublisherFundedUpload(
-          textBlob,
-          epochs,
-          account.address
-        );
-        setUploadResult([result]);
-      }
+      await uploadFiles(
+        [
+          {
+            fileIdentifier: "user-upload.txt",
+            contentType: FileType.TEXT,
+            bytes: new TextEncoder().encode(text),
+          },
+        ],
+        epochs
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      const errorMessage = err instanceof Error ? err.message : "Upload failed";
+      setError(errorMessage);
     } finally {
       setIsUploading(false);
     }
-  };
-
-  const handleUserPaidUpload = async (text: string) => {
-    // const keypair = Ed25519Keypair.fromSecretKey(
-    //   ""
-    // );
-
-    if (!account) {
-      throw new Error("Wallet not connected");
-    }
-
-    console.log("text:", text);
-
-    // const file = WalrusFile.from({
-    //   contents: new TextEncoder().encode(text),
-    //   identifier: "user-upload.txt",
-    //   tags: {
-    //     "content-type": "text/plain",
-    //   },
-    // });
-
-    // console.log("file text:", await file.text());
-    // console.log("file bytes:", await file.bytes());
-    // console.log("file identifier:", await file.getIdentifier());
-    // console.log("file tags:", await file.getTags());
-
-    // const result = await walrusClient.writeFiles({
-    //   files: [file],
-    //   epochs, // Storage duration in epochs
-    //   deletable: true, // Whether files can be deleted
-    //   signer: keypair, // Signs and pays for transactions
-    // });
-
-    // console.log("result:", result);
-
-    // const quiltId = result[0].blobId;
-
-    // const blob = await walrusClient.getBlob({ blobId: quiltId });
-    // const blobFiles = await blob.files();
-    // // time
-    // console.log("time:", new Date().toISOString());
-    // console.log("blobFiles:", blobFiles);
-
-    // blobFiles.forEach(async (file) => {
-    //   console.log("blob file bytes:", await file.bytes());
-    //   console.log("blob file text:", await file.text());
-    //   console.log("blob file tags:", await file.getTags());
-    //   console.log("blob file identifier:", await file.getIdentifier());
-    //   try {
-    //     console.log("blob file json:", await file.json());
-    //   } catch (error) {
-    //     console.log("blob file json error:", error);
-    //   }
-    //   console.log("time:", new Date().toISOString());
-    // });
-
-    // const files = await walrusClient.getFiles({
-    //   ids: result.map((file) => file.blobId),
-    // });
-
-    // console.log("files:", files);
-
-    // files.forEach(async (file) => {
-    //   console.log("file bytes:", await file.bytes());
-    //   console.log("file text:", await file.text());
-    //   console.log("file tags:", await file.getTags());
-    //   console.log("file identifier:", await file.getIdentifier());
-    // });
-
-    // Step 1: Create the WalrusFile and flow
-    // Create the WalrusFile and flow
-    const flow = walrusClient.writeFilesFlow({
-      files: [
-        WalrusFile.from({
-          contents: new TextEncoder().encode(text),
-          identifier: "user-upload.txt",
-          tags: {
-            "content-type": FileType.TEXT,
-          },
-        }),
-      ],
-    });
-    console.log("after flow");
-
-    await flow.encode();
-
-    console.log("flow:", flow);
-
-    // Step 2: Register the blob
-    const registerTx = flow.register({
-      epochs,
-      owner: account.address,
-      deletable: true,
-    });
-
-    // Set the sender and build the transaction with the Sui client
-    registerTx.setSender(account.address);
-    await registerTx.build({ client: suiClient });
-
-    if (!currentWallet) {
-      throw new Error("No wallet connected");
-    }
-
-    const { digest } = await signAndExecuteTransaction(currentWallet, {
-      transaction: registerTx,
-      account: account,
-      chain: "sui:testnet",
-    });
-
-    console.log("digest:", digest);
-    // Step 3: Upload the data to storage nodes
-    await flow.upload({ digest });
-
-    console.log("after flow.upload");
-
-    // Step 4: Certify the blob
-    const certifyTx = flow.certify();
-
-    console.log("certifyTx:", certifyTx);
-
-    // Set the sender and build the transaction with the Sui client
-    certifyTx.setSender(account.address);
-    await certifyTx.build({ client: suiClient });
-
-    console.log("after certifyTx.build");
-
-    await signAndExecuteTransaction(currentWallet, {
-      transaction: certifyTx,
-      account: account,
-      chain: "sui:testnet",
-    });
-
-    console.log("after 2# signAndExecuteTransaction");
-
-    // Step 5: Get the new files
-    const files = await flow.listFiles();
-    const quiltId = files[0].blobId;
-
-    const blob = await walrusClient.getBlob({ blobId: quiltId });
-    console.log("blob:", blob);
-    const blobFiles = await blob.files();
-    console.log("blobFiles:", blobFiles);
-
-    const newUploadResult: UploadResult[] = [];
-    blobFiles.forEach(async (file) => {
-      console.log("file:", file);
-      const tags = await file.getTags();
-      const fileIdentifier = await file.getIdentifier();
-      const bytes = await file.bytes();
-
-      console.log("tags:", tags);
-      console.log("fileIdentifier:", fileIdentifier);
-      console.log("bytes:", bytes);
-
-      newUploadResult.push({
-        id: quiltId,
-        contentType: tags["content-type"] as ContentType,
-        fileIdentifier: fileIdentifier,
-        bytes,
-      });
-    });
-
-    setUploadResult(newUploadResult);
   };
 
   return (
@@ -336,45 +182,6 @@ function WalrusUpload() {
           borderRadius: "4px",
         }}
       >
-        <div style={{ marginBottom: "10px" }}>
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              marginBottom: "8px",
-            }}
-          >
-            <input
-              type="radio"
-              name="paymentMethod"
-              checked={!useUserPayment}
-              onChange={() => setUseUserPayment(false)}
-              style={{ marginRight: "8px" }}
-            />
-            <strong>Publisher-Funded (Free)</strong>
-            <span
-              style={{ marginLeft: "10px", fontSize: "12px", color: "#666" }}
-            >
-              Publisher pays storage costs, limited duration
-            </span>
-          </label>
-          <label style={{ display: "flex", alignItems: "center" }}>
-            <input
-              type="radio"
-              name="paymentMethod"
-              checked={useUserPayment}
-              onChange={() => setUseUserPayment(true)}
-              style={{ marginRight: "8px" }}
-            />
-            <strong>User-Paid</strong>
-            <span
-              style={{ marginLeft: "10px", fontSize: "12px", color: "#666" }}
-            >
-              You pay with WAL tokens, choose storage duration
-            </span>
-          </label>
-        </div>
-
         {walBalance !== null && (
           <div style={{ fontSize: "12px", color: "#666" }}>
             Your WAL balance: <strong>{walBalance} WAL</strong>
@@ -410,12 +217,9 @@ function WalrusUpload() {
           value={epochs}
           onChange={(e) => setEpochs(Number(e.target.value))}
           style={{ width: "100%", marginBottom: "5px" }}
-          disabled={!useUserPayment}
         />
         <div style={{ fontSize: "12px", color: "#666" }}>
-          {useUserPayment
-            ? "Longer storage = higher WAL cost"
-            : "Publisher-funded storage limited to selected epochs"}
+          Longer storage = higher WAL cost
         </div>
       </div>
 
@@ -437,10 +241,7 @@ function WalrusUpload() {
       <button
         onClick={handleUpload}
         disabled={
-          !text.trim() ||
-          isUploading ||
-          !account ||
-          (useUserPayment && Number(walBalance) === 0)
+          !text.trim() || isUploading || !account || Number(walBalance) === 0
         }
         style={{
           padding: "10px 20px",
@@ -448,7 +249,7 @@ function WalrusUpload() {
             text.trim() &&
             !isUploading &&
             account &&
-            !(useUserPayment && Number(walBalance) === 0)
+            !(Number(walBalance) === 0)
               ? "#007bff"
               : "#ccc",
           color: "white",
@@ -458,18 +259,14 @@ function WalrusUpload() {
             text.trim() &&
             !isUploading &&
             account &&
-            !(useUserPayment && Number(walBalance) === 0)
+            !(Number(walBalance) === 0)
               ? "pointer"
               : "not-allowed",
         }}
       >
         {isUploading
-          ? useUserPayment
-            ? "Creating Transaction..."
-            : "Uploading to Walrus & Sui..."
-          : useUserPayment
-          ? `Pay with WAL & Upload (${epochs} epochs)`
-          : `Upload to Walrus (${epochs} epochs)`}
+          ? "Creating Transaction..."
+          : `Pay with WAL & Upload (${epochs} epochs)`}
       </button>
 
       {error && (
@@ -478,28 +275,35 @@ function WalrusUpload() {
         </div>
       )}
 
-      {uploadResult.length > 0 && (
-        <div
-          style={{
-            marginTop: "20px",
-            padding: "15px",
-            backgroundColor: "#010407",
-            border: "1px solid #007bff",
-            borderRadius: "8px",
-          }}
-        >
-          <h4 style={{ color: "#007bff", marginTop: 0 }}>
-            Upload Successful! 🎉
-          </h4>
-          🔗 Content is now accessible on the decentralized network
-          {uploadResult.map((result) => (
-            <div key={result.id}>
-              <h5>{result.fileIdentifier}</h5>
-              <p>{result.contentType}</p>
-              <p>{result.bytes.toString()}</p>
-            </div>
-          ))}
-        </div>
+      {uploadResults.length > 0 && (
+        // show quilt id
+        <>
+          <div>
+            <h4>Quilt ID: {quiltId}</h4>
+          </div>
+
+          <div
+            style={{
+              marginTop: "20px",
+              padding: "15px",
+              backgroundColor: "#010407",
+              border: "1px solid #007bff",
+              borderRadius: "8px",
+            }}
+          >
+            <h4 style={{ color: "#007bff", marginTop: 0 }}>
+              Upload Successful! 🎉
+            </h4>
+            🔗 Content is now accessible on the decentralized network
+            {uploadResults.map((result) => (
+              <div key={result.id}>
+                <h5>{result.fileIdentifier}</h5>
+                <p>{result.contentType}</p>
+                <p>{result.bytes.toString()}</p>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
