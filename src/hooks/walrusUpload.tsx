@@ -55,6 +55,7 @@ export const useWalrusUpload = () => {
 
     await flow.encode();
 
+    const registerToast = toast.loading("Registering blob...");
     // Step 2: Register the blob
     const registerTx = flow.register({
       epochs,
@@ -67,7 +68,8 @@ export const useWalrusUpload = () => {
     await registerTx.build({ client: suiClient });
 
     if (!currentWallet) {
-      throw new Error("No wallet connected");
+      toast.error("No wallet connected");
+      return;
     }
 
     const { digest } = await signAndExecuteTransaction(currentWallet, {
@@ -75,13 +77,15 @@ export const useWalrusUpload = () => {
       account: account,
       chain: "sui:testnet",
     });
+    toast.success("Blob registered", { id: registerToast });
 
     console.log("digest:", digest);
+    const uploadToast = toast.loading("Uploading blob...");
     // Step 3: Upload the data to storage nodes
     await flow.upload({ digest });
+    toast.success("Blob uploaded", { id: uploadToast });
 
-    console.log("after flow.upload");
-
+    const certifyToast = toast.loading("Certifying blob...");
     // Step 4: Certify the blob
     const certifyTx = flow.certify();
 
@@ -91,35 +95,28 @@ export const useWalrusUpload = () => {
     certifyTx.setSender(account.address);
     await certifyTx.build({ client: suiClient });
 
-    console.log("after certifyTx.build");
-
     await signAndExecuteTransaction(currentWallet, {
       transaction: certifyTx,
       account: account,
       chain: "sui:testnet",
     });
+    toast.success("Blob certified", { id: certifyToast });
 
-    console.log("after 2# signAndExecuteTransaction");
-
+    const getFilesToast = toast.loading("Reading files info...");
     // Step 5: Get the new files
     const flowFiles = await flow.listFiles();
     const quiltId = flowFiles[0].blobId;
     setQuiltId(quiltId);
 
     const blob = await walrusClient.getBlob({ blobId: quiltId });
-    console.log("blob:", blob);
     const blobFiles = await blob.files();
-    console.log("blobFiles:", blobFiles);
+    toast.success("Files info read", { id: getFilesToast });
 
+    const setUploadResultsToast = toast.loading("Setting upload results...");
     blobFiles.forEach(async (file) => {
-      console.log("file:", file);
       const tags = await file.getTags();
       const fileIdentifier = await file.getIdentifier();
       const bytes = await file.bytes();
-
-      console.log("tags:", tags);
-      console.log("fileIdentifier:", fileIdentifier);
-      console.log("bytes:", bytes);
 
       setUploadResults((prev) => [
         ...prev,
@@ -131,6 +128,7 @@ export const useWalrusUpload = () => {
         },
       ]);
     });
+    toast.success("Upload results set", { id: setUploadResultsToast });
   };
 
   return { uploadFiles, quiltId, uploadResults };
